@@ -2,7 +2,7 @@
 
 # Change the absolute path first!
 DATA_ROOT_DIR="/datadrive/final/InstantSplat_VGGT/InstantSplatData"
-OUTPUT_DIR="output_eval_vggt_new3"
+OUTPUT_DIR="output_eval_vggt_new6"
 DATASETS=(
     Tanks
 )
@@ -57,7 +57,7 @@ run_on_gpu() {
 
     # (0) VGGT Processing - Generate COLMAP files from images
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting VGGT processing..."
-    CUDA_VISIBLE_DEVICES=${GPU_ID} python ./init_geo_vggt.py ${SOURCE_PATH} --run_vggt --image_dir ${IMAGE_PATH} --n_views ${N_VIEW} \
+    CUDA_VISIBLE_DEVICES=${GPU_ID} python ./init_geo_vggt.py ${SOURCE_PATH} --run_vggt --image_dir ${IMAGE_PATH} --n_views ${N_VIEW} --recover_scale\
     > ${MODEL_PATH}/00_vggt_colmap.log 2>&1
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] VGGT processing completed. Log saved in ${MODEL_PATH}/00_vggt_colmap.log"
 
