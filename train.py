@@ -59,7 +59,7 @@ def save_pose(path, quat_pose, train_cams, llffhold=2):
     np.save(path, colmap_poses)
 
 
-def load_and_prepare_confidence(confidence_path, device='cuda', scale=(0.1, 1.0)):
+def load_and_prepare_confidence(confidence_path, device='cuda', scale=(0.1, 1.0), expected_points=None):
     """
     Loads, normalizes, inverts, and scales confidence values to obtain learning rate modifiers.
     
@@ -67,12 +67,33 @@ def load_and_prepare_confidence(confidence_path, device='cuda', scale=(0.1, 1.0)
         confidence_path (str): Path to the .npy confidence file.
         device (str): Device to load the tensor onto.
         scale (tuple): Desired range for the learning rate modifiers.
+        expected_points (int, optional): Expected number of points. If provided, will resize
+                                        the confidence values to match this count.
     
     Returns:
         torch.Tensor: Learning rate modifiers.
     """
     # Load and normalize
     confidence_np = np.load(confidence_path)
+    
+    # Resize confidence values if needed
+    if expected_points is not None and confidence_np.shape[0] != expected_points:
+        print(f"WARNING: Confidence file has {confidence_np.shape[0]} points, but model expects {expected_points} points")
+        print(f"Resizing confidence values to match model's point count...")
+        
+        if confidence_np.shape[0] < expected_points:
+            # Pad with mean value
+            mean_confidence = np.mean(confidence_np)
+            new_confidence = np.ones((expected_points, confidence_np.shape[1]), dtype=confidence_np.dtype) * mean_confidence
+            new_confidence[:confidence_np.shape[0]] = confidence_np
+            print(f"Padded confidence values from {confidence_np.shape[0]} to {expected_points}")
+        else:
+            # Truncate
+            new_confidence = confidence_np[:expected_points]
+            print(f"Truncated confidence values from {confidence_np.shape[0]} to {expected_points}")
+        
+        confidence_np = new_confidence
+    
     confidence_tensor = torch.from_numpy(confidence_np).float().to(device)
     normalized_confidence = torch.sigmoid(confidence_tensor)
 
@@ -89,10 +110,15 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree)
 
-    # per-point-optimizer
-    confidence_path = os.path.join(dataset.source_path, f"sparse_{dataset.n_views}/0", "confidence_dsp.npy")
-    confidence_lr = load_and_prepare_confidence(confidence_path, device='cuda', scale=(1, 100))
     scene = Scene(dataset, gaussians)
+    
+    # Get the number of points after loading the model
+    num_points = gaussians.get_xyz.shape[0]
+    print(f"Number of points at initialisation :  {num_points}")
+    
+    # per-point-optimizer with confidence resizing
+    confidence_path = os.path.join(dataset.source_path, f"sparse_{dataset.n_views}/0", "confidence_dsp.npy")
+    confidence_lr = load_and_prepare_confidence(confidence_path, device='cuda', scale=(1, 100), expected_points=num_points)
 
     if opt.pp_optimizer:
         gaussians.training_setup_pp(opt, confidence_lr)                          
