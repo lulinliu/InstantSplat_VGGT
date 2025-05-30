@@ -6,6 +6,8 @@ import argparse
 import sys
 import torch
 from pathlib import Path
+from PIL import Image
+import glob
 
 
 # Add path to ensure vggt is importable
@@ -34,61 +36,76 @@ def load_points3D(txt):
             err.append(float(v[7]))
     return np.asarray(xyz, np.float32), np.asarray(rgb, np.float32), np.asarray(err, np.float32)
 
-def recover_real_scale(predictions, image_dir):
-    # Try to get scene center and scale from metadata
-    try:
-        # Since return_metadata is not supported, we're going to skip this approach
-        # and directly compute scale from 3D points
-        raise Exception("Skipping metadata approach, using 3D points directl because return function is not applicable")
-    except Exception as e:
-        print(f"Could not load metadata from images: {e}")
-        print("Computing scene center and scale from 3D points...")
+def get_image_dimensions(all_predictions, image_dir):
+    """获取VGGT处理后和原始图像的尺寸信息"""
+    # Get VGGT processed image dimensions
+    if len(all_predictions["depth"][0].shape) > 2:
+        vggt_h, vggt_w = all_predictions["depth"][0].shape[:2]  
+    else:
+        vggt_h, vggt_w = all_predictions["depth"][0].shape
+    
+    # Get original image dimensions
+    image_files = glob.glob(os.path.join(image_dir, "*"))
+    image_files = sorted([f for f in image_files if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
+    
+    if image_files:
+        sample_img = Image.open(image_files[0])
+        orig_w, orig_h = sample_img.size
+        print(f"Original image size: {orig_w}x{orig_h}, VGGT size: {vggt_w}x{vggt_h}")
+    else:
+        print("Warning: Could not determine original image size, using VGGT size")
+        orig_w, orig_h = vggt_w, vggt_h
+    
+    return vggt_w, vggt_h, orig_w, orig_h
+
+def recover_real_scale(predictions, vggt_w, vggt_h, orig_w, orig_h):
+    # Compute scene center and scale from 3D points
+    all_points = []
+    for i in range(len(predictions["extrinsic"])):
+        depth = predictions["depth"][i]
+        xyz_points = predictions.get("xyz_points", None)
         
-        # Compute scene center and scale from 3D points
-        all_points = []
-        for i in range(len(predictions["extrinsic"])):
-            depth = predictions["depth"][i]
-            xyz_points = predictions.get("xyz_points", None)
+        if xyz_points is not None:
+            pts = xyz_points[i].reshape(-1, 3)
+        else:
+            if len(depth.shape) > 2:
+                depth = depth.reshape(depth.shape[0], depth.shape[1])
             
-            if xyz_points is not None:
-                pts = xyz_points[i].reshape(-1, 3)
-            else:
-                # If xyz_points not available, use depth to compute 3D points
-                # Fix: Handle depth with more than 2 dimensions
-                if len(depth.shape) > 2:
-                    # If depth has shape like (H, W, 1), reshape it to (H, W)
-                    depth = depth.reshape(depth.shape[0], depth.shape[1])
-                
-                h, w = depth.shape
-                y, x = np.mgrid[:h, :w]
-                x = x.reshape(-1)
-                y = y.reshape(-1)
-                z = depth.reshape(-1)
-                
-                # Use estimated intrinsics to get 3D points
-                intrinsics = predictions["intrinsic"][i]
-                fx = intrinsics[0, 0]
-                fy = intrinsics[1, 1]
-                cx = intrinsics[0, 2]
-                cy = intrinsics[1, 2]
-                
-                # Project to 3D
-                x_world = (x - cx) * z / fx
-                y_world = (y - cy) * z / fy
-                pts = np.stack([x_world, y_world, z], axis=1)
+            h, w = depth.shape
+            y, x = np.mgrid[:h, :w]
+            x = x.reshape(-1)
+            y = y.reshape(-1)
+            z = depth.reshape(-1)
             
-            # Transform to world coordinates
-            R = predictions["extrinsic"][i][:3, :3]
-            t = predictions["extrinsic"][i][:3, 3]
-            pts_world = (R @ pts.T).T + t
-            all_points.append(pts_world)
+            intrinsics = predictions["intrinsic"][i]
+            fx = intrinsics[0, 0]
+            fy = intrinsics[1, 1]
+            cx = intrinsics[0, 2]
+            cy = intrinsics[1, 2]
+            
+            x_world = (x - cx) * z / fx
+            y_world = (y - cy) * z / fy
+            pts = np.stack([x_world, y_world, z], axis=1)
         
-        all_points = np.concatenate(all_points, axis=0)
-        scene_center = np.mean(all_points, axis=0)
-        dists = np.linalg.norm(all_points - scene_center, axis=1)
-        scene_scale = np.max(dists)
-        
-        print(f"Computed scene scale: {scene_scale}, center: {scene_center}")
+        # Transform to world coordinates
+        R = predictions["extrinsic"][i][:3, :3]
+        t = predictions["extrinsic"][i][:3, 3]
+        pts_world = (R @ pts.T).T + t
+        all_points.append(pts_world)
+    
+    all_points = np.concatenate(all_points, axis=0)
+    mins = np.min(all_points, axis=0)
+    maxs = np.max(all_points, axis=0)
+    print(f"[VGGT] point cloud coord ranges:\n"
+          f"  x: {mins[0]:.4f} ~ {maxs[0]:.4f}\n"
+          f"  y: {mins[1]:.4f} ~ {maxs[1]:.4f}\n"
+          f"  z: {mins[2]:.4f} ~ {maxs[2]:.4f}")
+
+    scene_center = np.mean(all_points, axis=0)
+    dists = np.linalg.norm(all_points - scene_center, axis=1)
+    scene_scale = np.max(dists)
+    
+    print(f"Computed scene scale: {scene_scale}, center: {scene_center}")
     
     # Recover real-world scale of camera translations
     extrinsics_metric = []
@@ -105,30 +122,42 @@ def recover_real_scale(predictions, image_dir):
         ext_metric[:3, 3] = t_metric
         extrinsics_metric.append(ext_metric)
     
-    # Convert FOV to pixel focal lengths
+    # Convert FOV to pixel focal lengths WITH scaling
     intrinsics_metric = []
-    
-    # Get image dimensions from predictions
-    if len(predictions["depth"][0].shape) > 2:
-        h, w = predictions["depth"][0].shape[:2]  # Handle depth with shape (H, W, 1)
-    else:
-        h, w = predictions["depth"][0].shape
-    
     for i, intr in enumerate(predictions["intrinsic"]):
-        # Extract FOV from intrinsics if available, otherwise use a default
-        # Note: This may need adjustment based on how FOV is stored in your VGGT model
-        if "fov" in predictions:
-            fov_x, fov_y = predictions["fov"][i]
-        else:
-            # Estimate FOV from intrinsics
-            fx, fy = intr[0, 0], intr[1, 1]
-            fov_x = 2 * np.arctan(w / (2 * fx))
-            fov_y = 2 * np.arctan(h / (2 * fy))
+        # Extract FOV from intrinsics (using VGGT dimensions)
+        fx, fy = intr[0, 0], intr[1, 1]
+        fov_x = 2 * np.arctan(vggt_w / (2 * fx))
+        fov_y = 2 * np.arctan(vggt_h / (2 * fy))
         
-        # Convert FOV to pixel focal lengths
-        f_px = w / (2 * np.tan(fov_x / 2))
-        f_py = h / (2 * np.tan(fov_y / 2))
-        c_x, c_y = w/2, h/2
+        # Convert FOV to pixel focal lengths for original image size
+        f_px = orig_w / (2 * np.tan(fov_x / 2))
+        f_py = orig_h / (2 * np.tan(fov_y / 2))
+        c_x, c_y = orig_w/2, orig_h/2
+        
+        # Create metric intrinsic matrix for original image size
+        K = np.array([
+            [f_px,   0,   c_x],
+            [  0,  f_py,  c_y],
+            [  0,    0,     1]
+        ])
+        intrinsics_metric.append(K)
+        
+        print(f"Camera {i+1}: VGGT f=({fx:.1f},{fy:.1f}) -> Original f=({f_px:.1f},{f_py:.1f})")
+    
+    return extrinsics_metric, intrinsics_metric, scene_center, scene_scale
+
+def scale_test_intrinsics(test_predictions, vggt_w, vggt_h, orig_w, orig_h):
+    test_intrinsics_metric = []
+    for i, intr in enumerate(test_predictions["intrinsic"]):
+        fx, fy = intr[0, 0], intr[1, 1]
+        fov_x = 2 * np.arctan(vggt_w / (2 * fx))
+        fov_y = 2 * np.arctan(vggt_h / (2 * fy))
+        
+        # Using original image size
+        f_px = orig_w / (2 * np.tan(fov_x / 2))
+        f_py = orig_h / (2 * np.tan(fov_y / 2))
+        c_x, c_y = orig_w/2, orig_h/2
         
         # Create metric intrinsic matrix
         K = np.array([
@@ -136,30 +165,16 @@ def recover_real_scale(predictions, image_dir):
             [  0,  f_py,  c_y],
             [  0,    0,     1]
         ])
-        intrinsics_metric.append(K)
+        test_intrinsics_metric.append(K)
     
-    return extrinsics_metric, intrinsics_metric, scene_center, scene_scale
+    return test_intrinsics_metric
 
-def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_threshold=50.0, 
+def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_threshold, 
                                   mask_sky=True, mask_black_bg=True, mask_white_bg=False,
                                   stride=1, prediction_mode="Depthmap and Camera Branch", infer_video=False,
                                   llffhold=8, recover_scale=True):
     """
     Generate COLMAP data using VGGT and compute confidence
-    
-    Args:
-        image_dir: Directory containing input images
-        source_path: Source path from run_infer.sh
-        n_views: Number of views being processed
-        conf_threshold: Confidence threshold for VGGT point filtering
-        mask_sky: Whether to filter out sky points
-        mask_black_bg: Whether to filter out black background
-        mask_white_bg: Whether to filter out white background
-        stride: Stride for point sampling (higher = fewer points)
-        prediction_mode: Which prediction branch to use ("Depthmap and Camera Branch" or "Pointmap Branch")
-        infer_video: If True, only sparse/0 is populated. If False, both sparse/0 and sparse/1 are populated.
-        llffhold: Hold frequency for train/test splitting
-        recover_scale: Whether to recover real-world scale
     """
     print(f"Processing images from {image_dir}")
     
@@ -175,7 +190,7 @@ def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_thresho
     # Split images into train and test sets if not infer_video
     if infer_video:
         train_img_files = image_files
-        # test_img_files = []
+        test_img_files = []
     else:
         train_img_files, test_img_files = split_train_test(image_files, llffhold, n_views, verbose=True)
         print(f"Training images: {len(train_img_files)}, Testing images: {len(test_img_files)}")
@@ -186,30 +201,66 @@ def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_thresho
     # Initialize model
     model, device = load_model()
     
-    # Process training images only
-    print(f"Processing {len(train_img_files)} training images...")
-    predictions, image_names = process_images(train_img_files, model, device)
+    all_img_files = train_img_files + test_img_files
+    print(f"Processing {len(all_img_files)} images (train + test)...")
+    all_predictions, all_image_names = process_images(all_img_files, model, device)
+    
+    vggt_w, vggt_h, orig_w, orig_h = get_image_dimensions(all_predictions, image_dir)
+    
+    n_train = len(train_img_files)
+    n_test = len(test_img_files)
+    
+    print(f"Separating predictions: {n_train} training, {n_test} testing")
+    
+    train_image_names = all_image_names[:n_train]
+    test_image_names = all_image_names[n_train:] if n_test > 0 else []
+    
+    # Separate predictions
+    train_predictions = {key: all_predictions[key][:n_train] for key in all_predictions.keys()}
+    
+    if n_test > 0:
+        test_predictions = {key: all_predictions[key][n_train:] for key in all_predictions.keys()}
     
     # Recover real-world scale if requested
     if recover_scale:
         print("Recovering real-world scale...")
-        extrinsics_metric, intrinsics_metric, scene_center, scene_scale = recover_real_scale(predictions, image_dir)
+        extrinsics_metric, intrinsics_metric, scene_center, scene_scale = recover_real_scale(
+            train_predictions, vggt_w, vggt_h, orig_w, orig_h)
         
-        # Update predictions with metric data
-        original_extrinsics = predictions["extrinsic"]  # Save for reference
-        predictions["extrinsic"] = extrinsics_metric
-        predictions["intrinsic"] = intrinsics_metric
+        # Update train predictions with metric data
+        train_predictions["extrinsic"] = extrinsics_metric
+        train_predictions["intrinsic"] = intrinsics_metric
+        
+        # Update test predictions with metric data
+        if n_test > 0:
+            # Scale test extrinsics
+            test_extrinsics_metric = []
+            for ext in test_predictions["extrinsic"]:
+                R = ext[:3, :3]
+                t_norm = ext[:3, 3]
+                t_metric = t_norm * scene_scale + scene_center
+                ext_metric = np.eye(4)
+                ext_metric[:3, :3] = R
+                ext_metric[:3, 3] = t_metric
+                test_extrinsics_metric.append(ext_metric)
+            
+            # Scale test intrinsics
+            test_intrinsics_metric = scale_test_intrinsics(
+                test_predictions, vggt_w, vggt_h, orig_w, orig_h)
+            
+            test_predictions["extrinsic"] = test_extrinsics_metric
+            test_predictions["intrinsic"] = test_intrinsics_metric
         
         print(f"Scale recovery complete. Scene scale: {scene_scale}, center: {scene_center}")
     
     # Convert to COLMAP format
     print("Converting camera parameters to COLMAP format...")
-    quaternions, translations = extrinsic_to_colmap_format(predictions["extrinsic"])
+    quaternions, translations = extrinsic_to_colmap_format(train_predictions["extrinsic"])
     
     # Filter and prepare points
     print(f"Filtering points with confidence threshold {conf_threshold}%...")
     points3D, image_points2D, final_conf_values = filter_and_prepare_points(
-        predictions, 
+        train_predictions, 
         conf_threshold, 
         mask_sky=mask_sky, 
         mask_black_bg=mask_black_bg,
@@ -218,17 +269,14 @@ def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_thresho
         prediction_mode=prediction_mode
     )
     
-    # Get image dimensions
-    height, width = predictions["depth"].shape[1:3]
-    
     # Write COLMAP files for training images to sparse_0_path
     print(f"Writing COLMAP files to {sparse_0_path}...")
     write_colmap_cameras_txt(
         os.path.join(sparse_0_path, "cameras.txt"), 
-        predictions["intrinsic"], width, height)
+        train_predictions["intrinsic"], orig_w, orig_h)
     write_colmap_images_txt(
         os.path.join(sparse_0_path, "images.txt"), 
-        quaternions, translations, image_points2D, image_names)
+        quaternions, translations, image_points2D, train_image_names)
     write_colmap_points3D_txt(
         os.path.join(sparse_0_path, "points3D.txt"), 
         points3D)
@@ -251,97 +299,28 @@ def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_thresho
     if not infer_video and len(test_img_files) > 0:
         print(f"Processing test views for sparse_1_path...")
         
-        # Extract camera extrinsics from predictions
-        extrinsics_w2c = np.array([np.linalg.inv(ext) for ext in predictions["extrinsic"]])
-        
-        # Generate interpolated camera poses for test images
-        n_train = len(train_img_files)
-        n_test = len(test_img_files)
-        
-        print(f"Interpolating {n_test} test poses from {n_train} training poses...")
-        
-        if n_train < n_test:
-            # Need to interpolate more poses than we have training views
-            n_interp = (n_test // (n_train-1)) + 1
-            all_inter_pose = []
-            
-            for i in range(n_train-1):
-                # Extract the rotation and translation components
-                pose1 = np.eye(4)
-                pose1[:3, :3] = extrinsics_w2c[i][:3, :3]
-                pose1[:3, 3] = extrinsics_w2c[i][:3, 3]
-                
-                pose2 = np.eye(4)
-                pose2[:3, :3] = extrinsics_w2c[i+1][:3, :3]
-                pose2[:3, 3] = extrinsics_w2c[i+1][:3, 3]
-                
-                poses = np.stack([pose1[:3, :], pose2[:3, :]], axis=0)
-                tmp_inter_pose = generate_interpolated_path(poses=poses, n_interp=n_interp)
-                all_inter_pose.append(tmp_inter_pose)
-            
-            all_inter_pose = np.concatenate(all_inter_pose, axis=0)
-            last_pose = np.eye(4)
-            last_pose[:3, :3] = extrinsics_w2c[-1][:3, :3]
-            last_pose[:3, 3] = extrinsics_w2c[-1][:3, 3]
-            all_inter_pose = np.concatenate([all_inter_pose, last_pose[:3, :].reshape(1, 3, 4)], axis=0)
-            
-            # Sample the poses at regular intervals to match the number of test images
-            indices = np.linspace(0, all_inter_pose.shape[0] - 1, n_test, dtype=int)
-            sampled_poses = all_inter_pose[indices]
-            pose_test_init = []
-            
-            for p in sampled_poses:
-                tmp_view = np.eye(4)
-                tmp_view[:3, :3] = p[:3, :3]
-                tmp_view[:3, 3] = p[:3, 3]
-                pose_test_init.append(tmp_view)
-            
-            pose_test_init = np.stack(pose_test_init, 0)
-        else:
-            # We have enough training poses, so just sample from them
-            indices = np.linspace(0, extrinsics_w2c.shape[0] - 1, n_test, dtype=int)
-            pose_test_init = extrinsics_w2c[indices]
-        
-        # Generate test image quaternions and translations
-        test_quaternions = []
-        test_translations = []
-        
-        for pose in pose_test_init:
-            rot = pose[:3, :3]
-            trans = pose[:3, 3]
-            
-            # Convert rotation matrix to quaternion (simplified for this example)
-            # In a real implementation, use a proper rotation to quaternion conversion
-            from scipy.spatial.transform import Rotation
-            quat = Rotation.from_matrix(rot).as_quat()
-            quat = np.array([quat[3], quat[0], quat[1], quat[2]])  # wxyz order for COLMAP
-            
-            test_quaternions.append(quat)
-            test_translations.append(trans)
-        
-        test_quaternions = np.array(test_quaternions)
-        test_translations = np.array(test_translations)
+        test_quaternions, test_translations = extrinsic_to_colmap_format(test_predictions["extrinsic"])
         
         # Create test image points2D (empty for test images)
         test_image_points2D = [[] for _ in range(len(test_img_files))]
-        test_image_names = [os.path.basename(img_path) for img_path in test_img_files]
         
         # Write COLMAP files for test images to sparse_1_path
         print(f"Writing test views COLMAP files to {sparse_1_path}...")
         os.makedirs(sparse_1_path, exist_ok=True)
         
+        print(f"Using {n_test} real camera intrinsics for test images...")
         write_colmap_cameras_txt(
             os.path.join(sparse_1_path, "cameras.txt"), 
-            predictions["intrinsic"], width, height)  # Use same intrinsics
+            test_predictions["intrinsic"], orig_w, orig_h)
         
         write_colmap_images_txt(
             os.path.join(sparse_1_path, "images.txt"), 
             test_quaternions, test_translations, test_image_points2D, test_image_names)
         
-        # Create an empty points3D.txt file or copy from training
+        # Copy points3D from training
         write_colmap_points3D_txt(
             os.path.join(sparse_1_path, "points3D.txt"), 
-            points3D)  # Use same points
+            points3D)
         
         # Also save confidence to sparse_1_path
         confidence_path_1 = os.path.join(sparse_1_path, "confidence_dsp.npy")
@@ -352,6 +331,7 @@ def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_thresho
             np.save(os.path.join(sparse_1_path, "scene_scale_info.npy"), scale_info)
         
         print("Test view COLMAP files successfully written to sparse_1_path")
+        print(f"Used real intrinsics for {n_test} test cameras (computed by VGGT)")
     
     return confidence_path
 
@@ -361,7 +341,7 @@ if __name__ == "__main__":
     ap.add_argument("--run_vggt", action="store_true", help="Run VGGT to COLMAP conversion")
     ap.add_argument("--image_dir", type=str, help="Directory containing input images")
     ap.add_argument("--n_views", type=int, default=3, help="Number of views being processed")
-    ap.add_argument("--conf_threshold", type=float, default=50.0, help="Confidence threshold (0-100%)")
+    ap.add_argument("--conf_threshold", type=float, default=30.0, help="Confidence threshold (0-100%)")
     ap.add_argument("--mask_sky", action="store_true", help="Filter sky points")
     ap.add_argument("--mask_black_bg", action="store_true", help="Filter black background points")
     ap.add_argument("--mask_white_bg", action="store_true", help="Filter white background points")
@@ -400,8 +380,7 @@ if __name__ == "__main__":
         sparse = pathlib.Path(args.scene)
         xyz, rgb, reproj = load_points3D(sparse/"points3D.txt")
 
-        # set confidence to 0.3
-        conf = np.full(reproj.shape, 0.3, dtype=np.float32)
+        conf = np.full(reproj.shape, 0.1, dtype=np.float32)
         
         # Define directories based on n_views
         sparse_0_path = sparse/f"sparse_{args.n_views}/0"

@@ -2,16 +2,16 @@
 
 # Change the absolute path first!
 DATA_ROOT_DIR="/datadrive/final/InstantSplat_VGGT/InstantSplatData"
-OUTPUT_DIR="output_eval_vggt_new6"
+OUTPUT_DIR="output_eval_vggt_5_30_104pm"
 DATASETS=(
     Tanks
 )
 # source /datadrive/VistaDream/conda_envs/vggt/bin/activate
 SCENES=(
     # Family
-    Horse
+    # Horse
     # Ballroom
-    # Barn
+    Barn
     # Church
     # Francis
     # Ignatius
@@ -30,7 +30,7 @@ gs_train_iter=(
 
 # Function to get the id of an available GPU
 get_available_gpu() {
-    local mem_threshold=500
+    local mem_threshold=50000
     nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -v threshold="$mem_threshold" -F', ' '
     $2 < threshold { print $1; exit }
     '
@@ -90,14 +90,14 @@ run_on_gpu() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Training completed. Log saved in ${MODEL_PATH}/02_train.log"
 
     # (3) Init Test Pose
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Init Test Pose..."
-    CUDA_VISIBLE_DEVICES=${GPU_ID} python -W ignore ./init_test_pose_vggt.py \
-    -s ${SOURCE_PATH} \
-    -m ${MODEL_PATH} \
-    --n_views ${N_VIEW} \
-    --focal_avg \
-    > ${MODEL_PATH}/03_init_test_pose.log 2>&1
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Init Test Pose completed. Log saved in ${MODEL_PATH}/03_init_test_pose.log"
+    # echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting Init Test Pose..."
+    # CUDA_VISIBLE_DEVICES=${GPU_ID} python -W ignore ./init_test_pose_vggt.py \
+    # -s ${SOURCE_PATH} \
+    # -m ${MODEL_PATH} \
+    # --n_views ${N_VIEW} \
+    # --focal_avg \
+    # > ${MODEL_PATH}/03_init_test_pose.log 2>&1
+    # echo "[$(date '+%Y-%m-%d %H:%M:%S')] Init Test Pose completed. Log saved in ${MODEL_PATH}/03_init_test_pose.log"
 
     # (4) Render-Training_View
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting rendering training views..."
