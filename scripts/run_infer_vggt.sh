@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Change the absolute path first!
-DATA_ROOT_DIR="<Absolute_Path>/InstantSplat_VGGT/assets"
-OUTPUT_DIR="output_infer_vggt"
+DATA_ROOT_DIR="/datadrive/final/InstantSplat_VGGT/assets"
+OUTPUT_DIR="output_infer_vggt_5_30_3_10pm"
 DATASETS=(
     examples
 )
@@ -22,7 +22,7 @@ gs_train_iter=(
 
 # Function to get the id of an available GPU
 get_available_gpu() {
-    local mem_threshold=500
+    local mem_threshold=50000
     nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits | awk -v threshold="$mem_threshold" -F', ' '
     $2 < threshold { print $1; exit }
     '
@@ -48,7 +48,7 @@ run_on_gpu() {
 
     # (0) VGGT Processing - Generate COLMAP files from images
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting VGGT processing..."
-    CUDA_VISIBLE_DEVICES=${GPU_ID} python ./init_geo_vggt.py ${SOURCE_PATH} --run_vggt --image_dir ${IMAGE_PATH} --n_views ${N_VIEW} \
+    CUDA_VISIBLE_DEVICES=${GPU_ID} python ./init_geo_vggt.py ${SOURCE_PATH} --run_vggt --image_dir ${IMAGE_PATH} --n_views ${N_VIEW} --infer_video \
     > ${MODEL_PATH}/00_vggt_colmap.log 2>&1
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] VGGT processing completed. Log saved in ${MODEL_PATH}/00_vggt_colmap.log"
 
