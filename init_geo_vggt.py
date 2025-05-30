@@ -37,7 +37,6 @@ def load_points3D(txt):
     return np.asarray(xyz, np.float32), np.asarray(rgb, np.float32), np.asarray(err, np.float32)
 
 def get_image_dimensions(all_predictions, image_dir):
-    """获取VGGT处理后和原始图像的尺寸信息"""
     # Get VGGT processed image dimensions
     if len(all_predictions["depth"][0].shape) > 2:
         vggt_h, vggt_w = all_predictions["depth"][0].shape[:2]  
@@ -173,9 +172,7 @@ def generate_colmap_and_confidence(image_dir, source_path, n_views, conf_thresho
                                   mask_sky=True, mask_black_bg=True, mask_white_bg=False,
                                   stride=1, prediction_mode="Depthmap and Camera Branch", infer_video=False,
                                   llffhold=8, recover_scale=True):
-    """
-    Generate COLMAP data using VGGT and compute confidence
-    """
+
     print(f"Processing images from {image_dir}")
     
     # Define output directories based on SOURCE_PATH and N_VIEWS
