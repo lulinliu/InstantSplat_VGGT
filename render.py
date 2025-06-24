@@ -31,8 +31,92 @@ from utils.mesh_utils import GaussianExtractor, to_cam_open3d, post_process_mesh
 from utils.render_utils import generate_path, create_videos
 from utils.sfm_utils import save_time
 
+# Fix for double extension bug - monkey patch the readColmapCameras function
+def patch_colmap_reader():
+    """Patch the readColmapCameras function to fix the double extension bug"""
+    import scene.dataset_readers as dr
+    from PIL import Image
+    import sys
+    
+    # Store original function
+    original_readColmapCameras = dr.readColmapCameras
+    
+    def fixed_readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
+        cam_infos = []
+        poses = []
+        for idx, key in enumerate(cam_extrinsics):
+            sys.stdout.write('\r')
+            sys.stdout.write("Reading camera {}/{}".format(idx+1, len(cam_extrinsics)))
+            sys.stdout.flush()
+
+            extr = cam_extrinsics[key]
+            intr = cam_intrinsics[extr.camera_id]
+            height = intr.height
+            width = intr.width
+
+            uid = intr.id
+            R = np.transpose(dr.qvec2rotmat(extr.qvec))
+            T = np.array(extr.tvec)
+            pose = np.block([[R, T.reshape(3, 1)], [np.zeros((1, 3)), 1]])
+            poses.append(pose)
+
+            image_path = os.path.join(images_folder, os.path.basename(extr.name))
+            image_name = os.path.basename(image_path).split(".")[0]
+            
+            # FIX: Don't add .jpg if the path already has an extension
+            if os.path.exists(image_path):
+                image = Image.open(image_path)
+            elif os.path.exists(image_path + '.jpg'):
+                image = Image.open(image_path + '.jpg')
+            elif os.path.exists(image_path + '.png'):
+                image = Image.open(image_path + '.png')
+            else:
+                # Try removing double extensions if they exist
+                fixed_path = image_path.replace('.jpg.jpg', '.jpg').replace('.png.png', '.png')
+                if os.path.exists(fixed_path):
+                    image = Image.open(fixed_path)
+                else:
+                    raise FileNotFoundError(f"Could not find image at {image_path} or {image_path}.jpg or {image_path}.png or {fixed_path}")
+
+            if intr.model=="SIMPLE_PINHOLE":
+                focal_length_x = intr.params[0]
+                FovY = dr.focal2fov(focal_length_x, height)
+                FovX = dr.focal2fov(focal_length_x, width)
+            elif intr.model=="PINHOLE":
+                focal_length_x = intr.params[0]
+                focal_length_y = intr.params[1]
+                FovY = dr.focal2fov(focal_length_y, height)
+                FovX = dr.focal2fov(focal_length_x, width)
+            elif intr.model=="SIMPLE_RADIAL":
+                import cv2
+                f, cx, cy, r = intr.params
+                FovY = dr.focal2fov(f, height)
+                FovX = dr.focal2fov(f, width)
+                prcppoint = np.array([cx / width, cy / height])
+                # undistortion
+                image_cv = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                K = np.array([[f, 0, cx], [0, f, cy], [0, 0, 1]])
+                D = np.array([r, 0, 0, 0])  # Only radial distortion
+                image_undistorted = cv2.undistort(image_cv, K, D, None)
+                image_undistorted = cv2.cvtColor(image_undistorted, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(image_undistorted)
+            else:
+                assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
+
+            cam_info = dr.CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, image=image,
+                                  image_path=image_path, image_name=image_name, width=width, height=height)
+            cam_infos.append(cam_info)
+        sys.stdout.write('\n')
+        return cam_infos, poses
+    
+    # Replace the function
+    dr.readColmapCameras = fixed_readColmapCameras
+
 
 if __name__ == "__main__":
+    # Apply the patch before any scene loading
+    patch_colmap_reader()
+    
     # Set up command line argument parser
     parser = ArgumentParser(description="Testing script parameters")
     model = ModelParams(parser, sentinel=True)
@@ -82,7 +166,6 @@ if __name__ == "__main__":
             optimized_pose = np.load(Path(args.model_path) / 'pose' / f'ours_{iteration}' / 'pose_optimized.npy')
             viewpoint_stack = loadCameras(optimized_pose, scene.getTrainCameras())
             gaussExtractor.reconstruction_optim(gaussians, viewpoint_stack, 0, pipeline, background)            
-            # gaussExtractor.reconstruction(viewpoint_stack)
             gaussExtractor.export_image(train_dir)
 
         if not args.skip_mesh:
@@ -92,7 +175,6 @@ if __name__ == "__main__":
             gaussExtractor.gaussians.active_sh_degree = 0
             viewpoint_stack = loadCameras(optimized_pose, scene.getTrainCameras())
             gaussExtractor.reconstruction_optim(gaussians, viewpoint_stack, 0, pipeline, background)            
-            # gaussExtractor.reconstruction(viewpoint_stack)
 
             # extract the mesh and save
             if args.unbounded:
