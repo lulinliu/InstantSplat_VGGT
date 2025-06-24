@@ -153,6 +153,7 @@ def apply_confidence_based_filtering(points_3d, conf_values, points_rgb, points_
     low_conf_count = np.sum(conf_flat < conf_q1)
     
     print(f"\nConfidence Distribution:")
+    print(f"max_points: {max_points}")
     print(f"High confidence (>Q3): {high_conf_count:,} points ({100*high_conf_count/n_total_points:.1f}%)")
     print(f"Medium confidence (Q1-Q3): {med_conf_count:,} points ({100*med_conf_count/n_total_points:.1f}%)")
     print(f"Low confidence (<Q1): {low_conf_count:,} points ({100*low_conf_count/n_total_points:.1f}%)")
@@ -430,116 +431,114 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
 
     # Option: Apply confidence-based filtering for registration if desired
     # Uncomment the following lines to use only high-confidence points for registration
-    """
     if len(train_pts3d_n1) > 100000:  # Only filter if too many points
         print(f"Applying confidence filtering for registration...")
         filtered_pts, filtered_conf, _, _ = apply_confidence_based_filtering(
             points_3d[:n_views], train_conf_values, dummy_rgb.reshape(points_3d[:n_views].shape), 
             dummy_xyf.reshape(points_3d[:n_views].shape),
-            max_points=100000,  # Limit for registration performance
+            max_points=350000,  # Limit for registration performance
             output_dir=os.path.join(model_path, "registration_filtering")
         )
         train_pts3d_n1 = filtered_pts
         train_conf_values = filtered_conf.reshape(-1)
-    """
 
-    print(f'>> Performing point cloud registration...')
-    print(f"Current points shape: {train_pts3d_n1.shape}")
-    print(f"Previous points shape: {train_pts3d_m1.shape}")
+    # print(f'>> Performing point cloud registration...')
+    # print(f"Current points shape: {train_pts3d_n1.shape}")
+    # print(f"Previous points shape: {train_pts3d_m1.shape}")
 
     # Convert to torch tensors
     train_pts3d_n1_torch = torch.from_numpy(train_pts3d_n1).float()
     train_pts3d_m1_torch = torch.from_numpy(train_pts3d_m1).float()
 
-    # Use confidence weighting for registration
-    conf_weights = None
-    if train_conf_values is not None:
-        conf_weights = torch.from_numpy(train_conf_values.reshape(-1)).float()
-        print(f"Using confidence weights for registration: shape {conf_weights.shape}")
-        print(f"Confidence range: [{conf_weights.min():.4f}, {conf_weights.max():.4f}]")
+    # # Use confidence weighting for registration
+    # conf_weights = None
+    # if train_conf_values is not None:
+    #     conf_weights = torch.from_numpy(train_conf_values.reshape(-1)).float()
+    #     print(f"Using confidence weights for registration: shape {conf_weights.shape}")
+    #     print(f"Confidence range: [{conf_weights.min():.4f}, {conf_weights.max():.4f}]")
 
-    # Perform registration with confidence weighting
-    scale, R, T = rigid_points_registration(train_pts3d_n1_torch, train_pts3d_m1_torch, conf=None)
+    # # Perform registration with confidence weighting
+    # scale, R, T = rigid_points_registration(train_pts3d_n1_torch, train_pts3d_m1_torch, conf=None)
 
-    # Create transformation matrix
-    transform_matrix = torch.eye(4)
-    transform_matrix[:3, :3] = R
-    transform_matrix[:3, 3] = T
-    transform_matrix[:3, 3] *= scale
-    transform_matrix = transform_matrix.numpy()
+    # # Create transformation matrix
+    # transform_matrix = torch.eye(4)
+    # transform_matrix[:3, :3] = R
+    # transform_matrix[:3, 3] = T
+    # transform_matrix[:3, 3] *= scale
+    # transform_matrix = transform_matrix.numpy()
     
-    print(f"Registration scale: {scale.item():.4f}")
-    print(f"Registration translation: {T.numpy()}")
+    # print(f"Registration scale: {scale.item():.4f}")
+    # print(f"Registration translation: {T.numpy()}")
 
-    # Convert VGGT poses to homogeneous coordinates
-    if test_poses_n1.shape[-2:] == (3, 4):  # Check for [N, 3, 4] format
-        test_poses_n1_hom = np.zeros((test_poses_n1.shape[0], 4, 4))
-        test_poses_n1_hom[:, :3, :] = test_poses_n1
-        test_poses_n1_hom[:, 3, 3] = 1.0
-        test_poses_n1 = test_poses_n1_hom
+    # # Convert VGGT poses to homogeneous coordinates
+    # if test_poses_n1.shape[-2:] == (3, 4):  # Check for [N, 3, 4] format
+    #     test_poses_n1_hom = np.zeros((test_poses_n1.shape[0], 4, 4))
+    #     test_poses_n1_hom[:, :3, :] = test_poses_n1
+    #     test_poses_n1_hom[:, 3, 3] = 1.0
+    #     test_poses_n1 = test_poses_n1_hom
 
-    test_poses_m1 = transform_matrix @ test_poses_n1
+    # test_poses_m1 = transform_matrix @ test_poses_n1
 
-    # Save results
-    print(f'>> Saving results...')
-    end_time = time()
-    Train_Time = end_time - start_time
-    print(f"Time taken for {n_views} views: {Train_Time} seconds")
-    save_time(model_path, '[3] init_test_pose_vggt', Train_Time)
+    # # Save results
+    # print(f'>> Saving results...')
+    # end_time = time()
+    # Train_Time = end_time - start_time
+    # print(f"Time taken for {n_views} views: {Train_Time} seconds")
+    # save_time(model_path, '[3] init_test_pose_vggt', Train_Time)
     
-    # Convert to w2c format for saving (invert the c2w poses)
-    # from utils.sfm_utils import inv
-    test_poses_w2c = inv(test_poses_m1)
-    save_extrinsic(sparse_1_path, test_poses_w2c, test_img_files, image_suffix)
+    # # Convert to w2c format for saving (invert the c2w poses)
+    # # from utils.sfm_utils import inv
+    # test_poses_w2c = inv(test_poses_m1)
+    # save_extrinsic(sparse_1_path, test_poses_w2c, test_img_files, image_suffix)
     
     print(f'[INFO] VGGT Test Pose Initialization completed!')
     print(f'[INFO] Saved {len(test_img_files)} test poses to: {str(sparse_1_path)}')
     print(f'[INFO] Registration successfully aligned {train_pts3d_n1.shape[0]} points')
-    print(f'[INFO] Registration scale: {scale.item():.4f}')
+    # print(f'[INFO] Registration scale: {scale.item():.4f}')
 
     # Save additional analysis for test pose estimation
-    print(f'>> Saving test pose confidence analysis...')
+    # print(f'>> Saving test pose confidence analysis...')
 
-    # Analyze confidence for all views (including test)
-    if "world_points_conf" in confidence_data:
-        all_conf = confidence_data["world_points_conf"]
-        test_conf = confidence_data["world_points_conf"][n_views:]
-    elif "depth_conf" in confidence_data:
-        all_conf = confidence_data["depth_conf"] 
-        test_conf = confidence_data["depth_conf"][n_views:]
-    else:
-        all_conf = np.ones_like(points_3d[:, :, :, 0])
-        test_conf = np.ones_like(points_3d[n_views:, :, :, 0])
+    # # Analyze confidence for all views (including test)
+    # if "world_points_conf" in confidence_data:
+    #     all_conf = confidence_data["world_points_conf"]
+    #     test_conf = confidence_data["world_points_conf"][n_views:]
+    # elif "depth_conf" in confidence_data:
+    #     all_conf = confidence_data["depth_conf"] 
+    #     test_conf = confidence_data["depth_conf"][n_views:]
+    # else:
+    #     all_conf = np.ones_like(points_3d[:, :, :, 0])
+    #     test_conf = np.ones_like(points_3d[n_views:, :, :, 0])
 
     # Save confidence statistics for test poses
-    conf_analysis_dir = os.path.join(model_path, "test_pose_analysis")
-    os.makedirs(conf_analysis_dir, exist_ok=True)
+    # conf_analysis_dir = os.path.join(model_path, "test_pose_analysis")
+    # os.makedirs(conf_analysis_dir, exist_ok=True)
 
-    np.save(os.path.join(conf_analysis_dir, "test_confidence.npy"), test_conf)
-    np.save(os.path.join(conf_analysis_dir, "all_confidence.npy"), all_conf)
+    # np.save(os.path.join(conf_analysis_dir, "test_confidence.npy"), test_conf)
+    # np.save(os.path.join(conf_analysis_dir, "all_confidence.npy"), all_conf)
 
     # Save confidence statistics
-    with open(os.path.join(conf_analysis_dir, "test_pose_confidence_stats.txt"), 'w') as f:
-        f.write("TEST POSE CONFIDENCE ANALYSIS\n")
-        f.write("="*50 + "\n")
-        f.write(f"Number of training views: {n_views}\n")
-        f.write(f"Number of test views: {len(test_img_files)}\n")
-        f.write(f"Total views processed: {len(extrinsic)}\n\n")
+    # with open(os.path.join(conf_analysis_dir, "test_pose_confidence_stats.txt"), 'w') as f:
+    #     f.write("TEST POSE CONFIDENCE ANALYSIS\n")
+    #     f.write("="*50 + "\n")
+    #     f.write(f"Number of training views: {n_views}\n")
+    #     f.write(f"Number of test views: {len(test_img_files)}\n")
+    #     f.write(f"Total views processed: {len(extrinsic)}\n\n")
         
-        train_conf_flat = all_conf[:n_views].reshape(-1)
-        test_conf_flat = test_conf.reshape(-1)
+    #     train_conf_flat = all_conf[:n_views].reshape(-1)
+    #     test_conf_flat = test_conf.reshape(-1)
         
-        f.write("Training views confidence:\n")
-        f.write(f"  Mean: {np.mean(train_conf_flat):.6f}\n")
-        f.write(f"  Std:  {np.std(train_conf_flat):.6f}\n")
-        f.write(f"  Range: [{np.min(train_conf_flat):.6f}, {np.max(train_conf_flat):.6f}]\n\n")
+    #     f.write("Training views confidence:\n")
+    #     f.write(f"  Mean: {np.mean(train_conf_flat):.6f}\n")
+    #     f.write(f"  Std:  {np.std(train_conf_flat):.6f}\n")
+    #     f.write(f"  Range: [{np.min(train_conf_flat):.6f}, {np.max(train_conf_flat):.6f}]\n\n")
         
-        f.write("Test views confidence:\n") 
-        f.write(f"  Mean: {np.mean(test_conf_flat):.6f}\n")
-        f.write(f"  Std:  {np.std(test_conf_flat):.6f}\n")
-        f.write(f"  Range: [{np.min(test_conf_flat):.6f}, {np.max(test_conf_flat):.6f}]\n")
+    #     f.write("Test views confidence:\n") 
+    #     f.write(f"  Mean: {np.mean(test_conf_flat):.6f}\n")
+    #     f.write(f"  Std:  {np.std(test_conf_flat):.6f}\n")
+    #     f.write(f"  Range: [{np.min(test_conf_flat):.6f}, {np.max(test_conf_flat):.6f}]\n")
 
-    print(f"Test pose confidence analysis saved to: {conf_analysis_dir}")
+    # print(f"Test pose confidence analysis saved to: {conf_analysis_dir}")
 
 
 if __name__ == "__main__":

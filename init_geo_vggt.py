@@ -491,8 +491,8 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
         intrinsic[:, :2, :] *= scale
         track_mask = pred_vis_scores > vggt_kwargs.get('vis_thresh', 0.2)
 
-        # Extract just the filenames for COLMAP (without extension)
-        image_names = [os.path.splitext(os.path.basename(f))[0] for f in image_path_list]
+        # Extract just the filenames for COLMAP (WITH extension)
+        image_names = [os.path.basename(f) for f in image_path_list]  # 保留完整文件名
 
         reconstruction, valid_track_mask = batch_np_matrix_to_pycolmap_with_names(
             points_3d, extrinsic, intrinsic, image_size_array,
@@ -523,7 +523,7 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
             conf_values = confidence_data.get("depth_conf", np.ones_like(depth_map))
             print("Using depth_conf as fallback")
         
-        max_points_for_colmap = 1000000
+        max_points_for_colmap = 10000000
         
         image_size_array = np.array([img_load_resolution, img_load_resolution])
         num_frames, height, width, _ = points_3d.shape
@@ -551,8 +551,8 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
         points_xyf = points_xyf_filtered
         # filtered_conf_values已经是正确的shape (N, 1)
 
-        # Extract just the filenames for COLMAP (without extension)
-        image_names = [os.path.splitext(os.path.basename(f))[0] for f in image_path_list]
+        # Extract just the filenames for COLMAP (WITH extension)
+        image_names = [os.path.basename(f) for f in image_path_list]  # 保留完整文件名
 
         reconstruction = batch_np_matrix_to_pycolmap_wo_track_with_names(
             points_3d, points_xyf, points_rgb, extrinsic, intrinsic, image_size_array,
@@ -603,9 +603,41 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
     reconstruction.write(str(sparse_0_path))
     
     # Convert binary to text format
-    convert_colmap_bin_to_txt(sparse_0_path)  # Try Option 1 first
-    # convert_colmap_bin_to_txt_cmd(sparse_0_path)  # Alternative: Option 2
-    # convert_colmap_bin_to_txt_manual(sparse_0_path)  # Alternative: Option 3
+    convert_colmap_bin_to_txt(sparse_0_path)
+
+    # *** NEW SECTION: Generate cameras.txt using same method as init_test_pose_vggt.py ***
+    print(f'>> Generating cameras.txt using direct method (same as test pose initialization)...')
+
+    # Extract focal lengths from VGGT intrinsic matrices
+    train_focals = []
+    for i in range(len(train_img_files)):
+        focal_x = intrinsic[i, 0, 0]
+        focal_y = intrinsic[i, 1, 1]
+        # Use average focal length per camera (same as test pose method)
+        avg_focal = (focal_x + focal_y) / 2.0
+        train_focals.append(avg_focal)
+
+    train_focals = np.array(train_focals)
+
+    # Get original image shapes for training images
+    # Load a training image to get its original dimensions
+    train_img_sample = PIL.Image.open(train_img_files[0])
+    train_img_org_shape = train_img_sample.size  # (width, height)
+    train_imgs_shape = (len(train_img_files), img_load_resolution, img_load_resolution, 3)  # Processing shape
+
+    # Generate cameras.txt directly using save_intrinsics (same method as test pose)
+    save_intrinsics(sparse_0_path, train_focals, train_img_org_shape, train_imgs_shape, save_focals=True)
+
+    print(f'Training cameras.txt generated using direct method')
+    print(f'Training focal lengths: {train_focals}')
+    print(f'Average training focal: {np.mean(train_focals):.2f}')
+
+    # Save the non-scaled focal lengths for later use by test pose initialization
+    np.save(os.path.join(sparse_0_path, 'non_scaled_focals.npy'), train_focals)
+    print(f'Saved non-scaled focals to: {os.path.join(sparse_0_path, "non_scaled_focals.npy")}')
+
+    # Remove POINTS2D data rows, keep only IMAGE_ID rows
+    # keep_only_image_id_rows(sparse_0_path)
     
     # Extract 3D points from COLMAP reconstruction for PLY export
     colmap_points_3d = []
@@ -780,6 +812,9 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
     print(f"Point cloud shape: {points_3d.shape}")
     print(f"Expected: [N_points, 3], Got: {points_3d.shape}")
 
+    # Remove POINTS2D empty lines from images.txt
+    remove_points2d_data_keep_empty_lines(sparse_0_path)
+
 
 def convert_colmap_bin_to_txt(sparse_0_path):
     """Convert COLMAP binary files to text format using pycolmap"""
@@ -885,21 +920,146 @@ def batch_np_matrix_to_pycolmap_wo_track_with_names(
     return reconstruction
 
 
-def confidence_based_filtering(points_3d, conf_values, max_points=100000):
-    # 展平所有数组
-    points_flat = points_3d.reshape(-1, 3)
-    conf_flat = conf_values.reshape(-1)
+# def confidence_based_filtering(points_3d, conf_values, max_points=100000):
+#     # 展平所有数组
+#     points_flat = points_3d.reshape(-1, 3)
+#     conf_flat = conf_values.reshape(-1)
     
-    # 按置信度降序排序
-    sorted_indices = np.argsort(conf_flat)[::-1]  # 从高到低
+#     # 按置信度降序排序
+#     sorted_indices = np.argsort(conf_flat)[::-1]  # 从高到低
     
-    # 取前max_points个最高置信度的点
-    if len(sorted_indices) > max_points:
-        selected_indices = sorted_indices[:max_points]
-    else:
-        selected_indices = sorted_indices
+#     # 取前max_points个最高置信度的点
+#     if len(sorted_indices) > max_points:
+#         selected_indices = sorted_indices[:max_points]
+#     else:
+#         selected_indices = sorted_indices
         
-    return points_flat[selected_indices], conf_flat[selected_indices]
+#     return points_flat[selected_indices], conf_flat[selected_indices]
+
+
+def remove_points2d_data_keep_empty_lines(sparse_0_path):
+    """
+    Remove POINTS2D coordinate data but keep empty lines to maintain COLMAP format
+    
+    Result format:
+    IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME
+    [empty line]
+    IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME  
+    [empty line]
+    """
+    import re
+    
+    images_txt_path = os.path.join(sparse_0_path, 'images.txt')
+    
+    if not os.path.exists(images_txt_path):
+        print(f"Warning: {images_txt_path} not found, skipping processing")
+        return
+    
+    print(f"🔧 Removing POINTS2D data from {images_txt_path} (keeping empty lines)")
+    
+    # Read the original file
+    with open(images_txt_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Create backup first
+    backup_path = os.path.join(sparse_0_path, 'images_with_points2d.txt')
+    with open(backup_path, 'w') as f:
+        f.writelines(lines)
+    print(f"📄 Original format backed up to {backup_path}")
+    
+    processed_lines = []
+    processed_points2d_lines = 0
+    kept_image_lines = 0
+    
+    # Pattern to identify IMAGE_ID lines
+    image_id_pattern = re.compile(r'^\d+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+\d+\s+\S+\.\w+')
+    
+    for i, line in enumerate(lines):
+        if line.startswith('#'):
+            # Keep all header/comment lines
+            processed_lines.append(line)
+        elif image_id_pattern.match(line.strip()):
+            # This is an IMAGE_ID line - keep it
+            processed_lines.append(line)
+            kept_image_lines += 1
+            print(f"  Kept IMAGE_ID line {i+1}: {line.strip()[:80]}...")
+        elif line.strip() == '':
+            # Already empty line - keep it
+            processed_lines.append(line)
+        elif line.strip() != '' and not line.startswith('#'):
+            # This is POINTS2D data - replace with empty line
+            processed_lines.append('\n')  # Empty line with newline
+            processed_points2d_lines += 1
+            print(f"  Replaced POINTS2D line {i+1} with empty line")
+    
+    # Write the processed file back
+    with open(images_txt_path, 'w') as f:
+        f.writelines(processed_lines)
+    
+    print(f"✅ Processing complete:")
+    print(f"   - Kept {kept_image_lines} IMAGE_ID lines")
+    print(f"   - Replaced {processed_points2d_lines} POINTS2D lines with empty lines")
+    print(f"   - Format: 2 lines per image (IMAGE_ID + empty line)")
+
+
+def keep_only_image_id_rows(sparse_0_path):
+    """
+    Post-process images.txt to keep only IMAGE_ID rows, 
+    removing POINTS2D data rows and ensuring proper newlines
+    """
+    import re
+    
+    images_txt_path = os.path.join(sparse_0_path, 'images.txt')
+    
+    if not os.path.exists(images_txt_path):
+        print(f"Warning: {images_txt_path} not found, skipping processing")
+        return
+    
+    print(f"🔧 Removing POINTS2D data rows from {images_txt_path}")
+    
+    # Read the original file
+    with open(images_txt_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Create backup first
+    backup_path = os.path.join(sparse_0_path, 'images_with_points2d.txt')
+    with open(backup_path, 'w') as f:
+        f.writelines(lines)
+    print(f"📄 Original format backed up to {backup_path}")
+    
+    processed_lines = []
+    removed_points2d_lines = 0
+    kept_image_lines = 0
+    
+    # Pattern to identify IMAGE_ID lines: starts with number, has quaternion + translation + camera_id + filename
+    image_id_pattern = re.compile(r'^\d+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+[\d\.\-e]+\s+\d+\s+\S+\.\w+')
+    
+    for i, line in enumerate(lines):
+        if line.startswith('#'):
+            # Keep all header/comment lines (they already have newlines)
+            processed_lines.append(line)
+        elif image_id_pattern.match(line.strip()):
+            # This is an IMAGE_ID line - keep it and ensure it has a newline
+            if not line.endswith('\n'):
+                line = line.rstrip() + '\n'
+            processed_lines.append(line)
+            processed_lines.append('\n')
+            kept_image_lines += 1
+            print(f"  Kept IMAGE_ID line {i+1}: {line.strip()[:80]}...")
+        elif line.strip() != '' and not line.startswith('#'):
+            # This is likely a POINTS2D data line - skip it
+            removed_points2d_lines += 1
+            print(f"  Removed POINTS2D line {i+1}: {line.strip()[:80]}...")
+        # Skip empty lines that are not in header
+    
+    # Write the processed file back
+    with open(images_txt_path, 'w') as f:
+        f.writelines(processed_lines)
+    
+    print(f"✅ Processing complete:")
+    print(f"   - Kept {kept_image_lines} IMAGE_ID lines")
+    print(f"   - Removed {removed_points2d_lines} POINTS2D data lines")
+    print(f"   - Each line properly terminated with newline")
 
 
 if __name__ == "__main__":
