@@ -165,7 +165,7 @@ def save_comprehensive_confidence_data(model_path, confidence_data, points_3d,
 
 def save_processed_images(sparse_0_path, images_tensor, image_files, image_suffix, prefix="resized_"):
     """Save the processed 512x512 images used by VGGT"""
-    print("Saving processed 512x512 images...")
+    print("Saving processed images...")
     
     # Create directory for processed images
     processed_img_dir = os.path.join(os.path.dirname(sparse_0_path), "processed_images")
@@ -410,7 +410,7 @@ def apply_confidence_based_filtering(points_3d, conf_values, points_rgb, points_
 
 
 def main(source_path, model_path, device, min_conf_thr, llffhold, n_views, 
-         image_size=512, use_ba=False, infer_video=False, **vggt_kwargs):
+         image_size=518, use_ba=False, infer_video=False, **vggt_kwargs):
 
     # Initialize MASt3R-style directory structure
     save_path, sparse_0_path, sparse_1_path = init_filestructure(Path(source_path), n_views)
@@ -444,7 +444,8 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
     
     # VGGT processing parameters - Follow MASt3R pattern
     vggt_fixed_resolution = 518  # Required by VGGT model
-    img_load_resolution = image_size  # Use same strategy as MASt3R
+    # img_load_resolution = vggt_fixed_resolution
+    img_load_resolution = image_size
     
     # Load images at specified size (like MASt3R)
     images, original_coords = load_and_preprocess_images_square(image_path_list, img_load_resolution)
@@ -452,7 +453,7 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
     original_coords = original_coords.to(device)
     
     print(f"Loaded images at resolution: {img_load_resolution}")
-    print(f"Will process at VGGT resolution: {vggt_fixed_resolution}")
+    # print(f"Will process at VGGT resolution: {vggt_fixed_resolution}")
     
     # Run VGGT with full confidence extraction
     start_time = time()
@@ -805,7 +806,7 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
         F.interpolate(images, size=(vggt_fixed_resolution, vggt_fixed_resolution), mode="bilinear", align_corners=False),
         image_path_list, 
         image_suffix,  # Use the already extracted image suffix
-        prefix="vggt_512x512_"
+        prefix="vggt_518x518_"
     )
 
     # Add debug prints in your training initialization
@@ -1081,7 +1082,7 @@ if __name__ == "__main__":
     parser.add_argument('--query_frame_num', type=int, default=8, help='Number of frames to query for tracking')
     parser.add_argument('--max_query_pts', type=int, default=4096, help='Maximum number of query points')
     parser.add_argument('--fine_tracking', action="store_true", default=True, help='Use fine tracking')
-    parser.add_argument('--image_size', type=int, default=512, help='Size to resize images (same as MASt3R)')
+    parser.add_argument('--image_size', type=int, default=518, help='Size to resize images (same as MASt3R)')
 
     args = parser.parse_args()
     

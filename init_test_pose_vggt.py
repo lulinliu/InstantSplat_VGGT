@@ -300,7 +300,7 @@ def apply_confidence_based_filtering(points_3d, conf_values, points_rgb, points_
 
 
 def main(source_path, model_path, device, min_conf_thr, llffhold, n_views, 
-         image_size=512, focal_avg=True, infer_video=False, **vggt_kwargs):
+         image_size=518, focal_avg=True, infer_video=False, **vggt_kwargs):
 
     # ---------------- (1) Load model and images ----------------  
     save_path, sparse_0_path, sparse_1_path = init_filestructure(Path(source_path), n_views)
@@ -423,16 +423,16 @@ def main(source_path, model_path, device, min_conf_thr, llffhold, n_views,
 
     # Option: Apply confidence-based filtering for registration if desired
     # Uncomment the following lines to use only high-confidence points for registration
-    if len(train_pts3d_n1) > 100000:  # Only filter if too many points
-        print(f"Applying confidence filtering for registration...")
-        filtered_pts, filtered_conf, _, _ = apply_confidence_based_filtering(
-            points_3d[:n_views], train_conf_values, dummy_rgb.reshape(points_3d[:n_views].shape), 
-            dummy_xyf.reshape(points_3d[:n_views].shape),
-            max_points=350000,  # Limit for registration performance
-            output_dir=os.path.join(model_path, "registration_filtering")
-        )
-        train_pts3d_n1 = filtered_pts
-        train_conf_values = filtered_conf.reshape(-1)
+    # if len(train_pts3d_n1) > 100000:  # Only filter if too many points
+    #     print(f"Applying confidence filtering for registration...")
+    #     filtered_pts, filtered_conf, _, _ = apply_confidence_based_filtering(
+    #         points_3d[:n_views], train_conf_values, dummy_rgb.reshape(points_3d[:n_views].shape), 
+    #         dummy_xyf.reshape(points_3d[:n_views].shape),
+    #         max_points=350000,  # Limit for registration performance
+    #         output_dir=os.path.join(model_path, "registration_filtering")
+    #     )
+    #     train_pts3d_n1 = filtered_pts
+    #     train_conf_values = filtered_conf.reshape(-1)
 
     # print(f'>> Performing point cloud registration...')
     # print(f"Current points shape: {train_pts3d_n1.shape}")
@@ -543,7 +543,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_views', type=int, default=3, help='Number of training views')
     parser.add_argument('--focal_avg', action="store_true", help='Use averaged focal length')
     parser.add_argument('--infer_video', action="store_true", help='Video inference mode')
-    parser.add_argument('--image_size', type=int, default=512, help='Size to resize images (same as MASt3R)')
+    parser.add_argument('--image_size', type=int, default=518, help='Size to resize images (same as MASt3R)')
 
     args = parser.parse_args()
     

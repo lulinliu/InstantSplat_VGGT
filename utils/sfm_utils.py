@@ -224,27 +224,54 @@ def save_extrinsic(sparse_path, extrinsics_w2c, img_files, image_suffix):
     write_images_text(images, images_txt_file)
 
 
+# def save_intrinsics(sparse_path, focals, org_imgs_shape, imgs_shape, save_focals=False):
+#     org_width, org_height = org_imgs_shape
+#     scale_factor_x = org_width / imgs_shape[2]
+#     scale_factor_y = org_height / imgs_shape[1]
+#     cameras_bin_file = sparse_path / 'cameras.bin'
+#     cameras_txt_file = sparse_path / 'cameras.txt'
+
+#     cameras = {}
+#     for i, focal in enumerate(focals, start=1):  # Start enumeration from 1
+#         cameras[i] = Camera(
+#             id=i,
+#             model="PINHOLE",
+#             width=org_width,
+#             height=org_height,
+#             params=[focal*scale_factor_x, focal*scale_factor_y, org_width/2, org_height/2]
+#         )    
+#     print(f' - scaling focal: ({focal}, {focal}) --> ({focal*scale_factor_x}, {focal*scale_factor_y})' )
+#     write_cameras_binary(cameras, cameras_bin_file)
+#     write_cameras_text(cameras, cameras_txt_file)
+#     if save_focals:
+#         np.save(sparse_path / 'non_scaled_focals.npy', focals)
 def save_intrinsics(sparse_path, focals, org_imgs_shape, imgs_shape, save_focals=False):
     org_width, org_height = org_imgs_shape
-    scale_factor_x = org_width / imgs_shape[2]
-    scale_factor_y = org_height / imgs_shape[1]
-    cameras_bin_file = sparse_path / 'cameras.bin'
-    cameras_txt_file = sparse_path / 'cameras.txt'
+    scale_factor_x = org_width / imgs_shape[2]   # Width scaling: 960/512 = 1.875
+    scale_factor_y = org_height / imgs_shape[1]  # Height scaling: 540/512 = 1.055
 
+    print(f"Scale factors → X: {scale_factor_x:.3f}, Y: {scale_factor_y:.3f}")
+    print(f"Resized image shape → width: {imgs_shape[2]}, height: {imgs_shape[1]}")
+    print(f"Original image shape → width: {org_width}, height: {org_height}")
+
+    scale_factor = scale_factor_x  # Force uniform scaling using width factor
+    
     cameras = {}
-    for i, focal in enumerate(focals, start=1):  # Start enumeration from 1
+    for i, focal in enumerate(focals, start=1):
         cameras[i] = Camera(
             id=i,
             model="PINHOLE",
             width=org_width,
             height=org_height,
-            params=[focal*scale_factor_x, focal*scale_factor_y, org_width/2, org_height/2]
+            params=[focal*scale_factor, focal*scale_factor, org_width/2, org_height/2]
         )    
-    print(f' - scaling focal: ({focal}, {focal}) --> ({focal*scale_factor_x}, {focal*scale_factor_y})' )
-    write_cameras_binary(cameras, cameras_bin_file)
-    write_cameras_text(cameras, cameras_txt_file)
+    print(f' - scaling focal: ({focal}, {focal}) --> ({focal*scale_factor}, {focal*scale_factor})' )
+    #                                                   Both same now
+    write_cameras_binary(cameras, sparse_path / 'cameras.bin')
+    write_cameras_text(cameras, sparse_path / 'cameras.txt')
     if save_focals:
         np.save(sparse_path / 'non_scaled_focals.npy', focals)
+
 
 
 def save_points3D(sparse_path, imgs, pts3d, confs, masks=None, use_masks=True, save_all_pts=False, save_txt_path=None, depth_threshold=0.01, max_pts_num=150 * 10**10):
